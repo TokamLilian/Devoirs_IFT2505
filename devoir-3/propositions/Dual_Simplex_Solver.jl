@@ -118,4 +118,3 @@ c = [0, 3, 4, 5, 0, 0, 0]
 @show size(c);
 
 xstar = DualsimplexSolver(A, b, c, verbose=true);
-#xstar = simplexSolver(A, b, c, verbose=true);
