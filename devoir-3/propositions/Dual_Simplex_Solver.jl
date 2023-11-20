@@ -1,120 +1,136 @@
-function pivot!(M::Matrix, i::Int, j::Int)
-    m, n = size(M)
-    @assert M[i, j] != 0
-    M[i, :] = M[i, :]/M[i, j]
-    for k in setdiff(1:m, i)
-        M[k, :] -= M[k, j] * M[i, :]
+mutable struct SimplexTableau
+    z_c     ::Array{Float64}  # coûts réduits
+    Y       ::Array{Vector{Float64}}  # contraintes linéaires
+    x_B     ::Array{Float64}  # solution de base
+    obj     ::Float64         # valeur de la fonction objectif
+    b_idx   ::Array{Int64}    # indices des variables de bases
+  
+    function SimplexTableau(z_c, Y, x_B, obj, b_idx)
+      new(z_c, Y, x_B, obj, b_idx)
     end
-    return M
-end
-
-function getxB(M::Matrix)
-    m, n = size(M)
-    return M[1:m-1, end]
-end
-
-function isOneHot(v::Vector)
-    n = length(v)
-    return (sum(iszero, v) == n-1) && (sum(isone, v) == 1)
-end 
-
-function findInitialBasis!(M::Matrix)
-    m, n = size(M)
-    m-=1
-    n-=1
-    basis = [-1 for _ in 1:m]
-    for i in 1:n
-        if isOneHot(M[1:end-1, i])
-            index = findfirst(isone, M[:, i])
-            basis[index] = i
-        end
-    end
-    @assert !any(t-> t == -1, basis) "problem not caconical"
-    for i in 1:m
-        j = basis[i]
-        M = pivot!(M, i, j)
-    end
-    return basis
-end
-
-#feasible prend un tableau du simplex et retourne si il contient une solution primal rélisable
-function feasible(M::Matrix{T}) where T
-    # Vérifier les contraintes linéaires
-    contraintes_lineaires = all(M[:, end] .>= 0)
-
-    # Vérifier la non-négativité des variables
-    non_negativite_variables = all(M[:, 1:end-1] .>= 0)
-
-    # La solution est réalisable si les deux conditions sont satisfaites
-    return contraintes_lineaires && non_negativite_variables
-end
-
-#retourrne la ligne du tableau du simplex dont la variable de base va sortir de la base
-function findLeavingVarInDual(M::Matrix{T}) where T
-    variables_sortie_positives = findall(x -> x > 0, M[:, end-1])
-
-    # S'il n'y a pas de variables de sortie positives, le problème n'est pas borné
-    isempty(variables_sortie_positives) && throw(ArgumentError("Problème non borné"))
-
-    ratios = [(i, M[i, end] / M[i, argmax(M[i, 1:end-2])]) for i in variables_sortie_positives]
-    
-    # Trouver la ligne correspondant au ratio minimum
-    ligne_sortie = argmin([x[2] for x in ratios])
-
-    return ligne_sortie
-end
-
-#retourne la variable qui va entrer dans la base. Si aucune variable ne peut entrer dans
-#la base, on retourne -1.
-function findEnteringVarInDual(M::Matrix{T}, leaving::Int) where T
-    coefficients_premiere_ligne = M[1, 1:end-1]
-
-    # Vérifier si tous les coefficients de la première ligne sont négatifs ou nuls
-    if all(x -> x <= 0, coefficients_premiere_ligne)
-        return -1  # Aucune variable ne peut entrer dans la base
-    else
-        # Trouver l'indice de la variable avec le coefficient le plus négatif
-        indice_variable_entree = argmin(coefficients_premiere_ligne)
-        return indice_variable_entree
-    end
-end
-
-
-function DualsimplexSolver(A::Matrix{T}, b::Vector, c::Vector; verbose::Bool = false) where T
-    @assert all(c .>= 0) #dual feasibility
-    M = [A b; c' 0]
-    basis = findInitialBasis!(M)
-    k = 1
-    nmax = 1000
-    while !feasible(M) && k < nmax
-        k+=1
-        verbose && display(M)
-        leaving = findLeavingVarInDual(M)
-        entering = findEnteringVarInDual(M, leaving)
-        if entering == -1
-            println("aucune variable ne peut entrer dans la base.")
-            println("problème non réalisable")
-        end
-        verbose && @show (entering, leaving)
-        basis[leaving] = entering
-        M = pivot!(M, leaving, entering)
-    end
+  
+  end 
+  
+  
+  function draw_table(t::SimplexTableau; verbose::Bool)
+    println("------------------------------")
+    A = hcat(t.Y...)
+    M = [A' t.x_B; t.z_c' t.obj]
     verbose && display(M)
-    m, n = size(M)
-    xstar = zeros(T, n - 1)
-    xstar[basis] = getxB(M)
-    return xstar
-end
+    println("------------------------------")
+  end
+  
+  
+  function pivot_point(tableau_simplexe)
+    # Récupération des indices des variables de base
+    b_idx = tableau_simplexe.b_idx
+  
+    # Calcul des coûts réduits des variables non de base
+    z_c = tableau_simplexe.z_c
+  
+    #Recuperer le nombre de variables de départ
+    nombre_variables = length(z_c) - length(b_idx)
+  
+    # Sélection de la variable d'entrée (variable avec le coût réduit le plus négatif)
+    if 1 in b_idx
+      indice_variable_entree = argmax(z_c[1:nombre_variables])
+    else
+      indice_variable_entree = argmin(z_c)
+    end
+  
+    # Récupération des coefficients de la colonne correspondant à la variable d'entrée
+    colonne_variable_entree = [ligne[indice_variable_entree] for ligne in tableau_simplexe.Y]
+  
+    # Sélection de la variable de sortie (variable de base avec le rapport positif minimal)
+    indices_sortants = findall(x -> x != 0, colonne_variable_entree)    ## specifique au probleme du devoir 3
+  
+    rapport_minimal = Inf
+    indice_variable_sortante = nothing
+  
+    for indice_sortant in indices_sortants
+        rapport = tableau_simplexe.x_B[indice_sortant] / colonne_variable_entree[indice_sortant]
+        if rapport < rapport_minimal
+            rapport_minimal = rapport
+            indice_variable_sortante = indice_sortant
+        end
+    end
+  
+    # Retourner les indices de la variable d'entrée et de sortie
+    return indice_variable_entree, b_idx[indice_variable_sortante]
+  end
+  
+  
+  function pivoting!(t::SimplexTableau)
+      m, n = length(t.Y), length(t.Y[1])
+  
+      entering, exiting = pivot_point(t)
+      exiting_temp = exiting
+  
+      #Recuperer la position(ligne) de la variable de sortie
+      exiting = findfirst(x -> x==exiting, t.b_idx)   
+  
+      @show (entering, exiting)
+  
+      # Pivoting: exiting-row, entering-column
+      # updating exiting-row
+      coef = t.Y[exiting][entering]
+      t.Y[exiting, :] /= coef
+      t.x_B[exiting] /= coef
+  
+      # updating other rows of Y
+      for i in setdiff(1:m, exiting)
+        coef = t.Y[i][entering]
+        t.Y[i, :] -= coef * t.Y[exiting, :]
+        t.x_B[i] -= coef * t.x_B[exiting]
+      end
+  
+      # updating the row for the reduced costs
+      coef = t.z_c[entering]
+      t.z_c[:] -= coef * t.Y[exiting][:]
+      t.obj -= coef * t.x_B[exiting]
+  
+      # Updating b_idx
+      t.b_idx[findall(x -> x == exiting_temp, t.b_idx)] .= entering
+      return t
+  
+  end 
+  
+  #feasible prend un tableau du simplex et retourne si il contient une solution primal rélisable
+  function feasible(t::SimplexTableau)
+    # Vérifier les couts reduits
+    couts_reduits = all(t.z_c[:, end] .>= 0)
+  
+    # Vérifier la non-négativité des variables
+  
+    non_negativite_variables = all(t.x_B[:, 1:end] .>= 0)
+  
+    # La solution est réalisable si les deux conditions sont satisfaites
+    return non_negativite_variables
+  end
 
+  using LinearAlgebra
+nouveauTableau = SimplexTableau([0, 3, 4, 5, 0, 0, 0], 
+                          [ [-1//1, 0, -1, 0, 1, 0, 0],
+                            [0, -1, -2, -1, 0, 1, 0],
+                            [0,  0,  0, -1, 0, 0, 1] ],
+                          [-3, -4, -2],
+                          0,
+                          [5, 6, 7])
 
-using LinearAlgebra
+function DualsimplexSolver(t::SimplexTableau; verbose::Bool = false)
+  k = 1
+  nmax = 1000
 
-Atilde = [1//1 0 1 0; 0 1 2 1; 0 0 0 1]
-A = -[Atilde -I(3)]
-@show size(A)
-b = -[3, 4, 2]
-@show size(b)
-c = [0, 3, 4, 5, 0, 0, 0]
-@show size(c);
+  while !feasible(t) && k < nmax
+      
+      k+=1
+      draw_table(t, verbose=true)
+      pivoting!(t)
+    end
+    
+  draw_table(t, verbose=true)
+  return t.obj
+end                    
 
-xstar = DualsimplexSolver(A, b, c, verbose=true);
+DualsimplexSolver(nouveauTableau, verbose = true)
+
